@@ -1,0 +1,80 @@
+# Chatwoot Enterprise (self-hosted COMPLETO) — uso LOCAL no Mac.
+# Sobe: Rails + Sidekiq + Postgres (pgvector) + Redis.
+#
+# O "Enterprise" liga em 2 partes:
+#   1) a pasta enterprise/ já existe na imagem  -> ChatwootApp.enterprise? = true
+#   2) destravar as features premium DEPOIS do boot, setando no banco
+#      INSTALLATION_PRICING_PLAN = enterprise   (ver RODAR_ENTERPRISE_LOCAL.md)
+#
+# Como usar:  docker compose -f docker-compose.enterprise.yaml up -d
+
+x-base: &base
+  # --- OPÇÃO A (padrão): imagem oficial prebuilt, casada com a VERSION deste repo (4.15.1) ---
+  image: chatwoot/chatwoot:v4.15.1
+  # A imagem oficial é só amd64. Em Apple Silicon (M1/M2/M3/M4) ela roda EMULADA.
+  # Em Mac Intel você pode remover a linha abaixo.
+  platform: linux/amd64
+  #
+  # --- OPÇÃO B: BUILD do código LOCAL (roda SUAS modificações; nativo arm64 no Apple Silicon) ---
+  # Para usar: comente as duas linhas `image:` e `platform:` acima e descomente o bloco abaixo.
+  # build:
+  #   context: .
+  #   dockerfile: docker/Dockerfile
+  env_file: .env
+  volumes:
+    - storage_data:/app/storage
+
+services:
+  rails:
+    <<: *base
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - '127.0.0.1:3000:3000'
+    environment:
+      - NODE_ENV=production
+      - RAILS_ENV=production
+      - INSTALLATION_ENV=docker
+    entrypoint: docker/entrypoints/rails.sh
+    command: ['bundle', 'exec', 'rails', 's', '-p', '3000', '-b', '0.0.0.0']
+    restart: unless-stopped
+
+  sidekiq:
+    <<: *base
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - NODE_ENV=production
+      - RAILS_ENV=production
+      - INSTALLATION_ENV=docker
+    command: ['bundle', 'exec', 'sidekiq', '-C', 'config/sidekiq.yml']
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=chatwoot
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "redis-server --requirepass \"$REDIS_PASSWORD\""]
+    env_file: .env
+    volumes:
+      - redis_data:/data
+    ports:
+      - '127.0.0.1:6379:6379'
+
+volumes:
+  storage_data:
+  postgres_data:
+  redis_data:

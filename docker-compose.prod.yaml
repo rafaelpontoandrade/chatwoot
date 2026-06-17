@@ -1,0 +1,77 @@
+# Chatwoot Enterprise (self-hosted COMPLETO) — PRODUÇÃO em Ubuntu, domínio crm.rpweb.site
+# Proxy reverso + HTTPS são feitos pelo CloudPanel (site tipo Reverse Proxy -> http://127.0.0.1:3000).
+# Este compose NÃO sobe proxy nem usa portas 80/443. Só expõe o app em 127.0.0.1:3000.
+#
+# Stack: Rails + Sidekiq + Postgres(pgvector) + Redis
+#
+# Sempre rode passando o env de produção:
+#   docker compose --env-file .env.production -f docker-compose.prod.yaml up -d
+#
+# Enterprise liga em 2 partes:
+#   1) pasta enterprise/ presente na imagem  -> ChatwootApp.enterprise? = true
+#   2) INSTALLATION_PRICING_PLAN = enterprise no banco (ver DEPLOY_UBUNTU_CRM.md, passo 6)
+
+x-base: &base
+  # Imagem oficial casada com a VERSION deste repo (4.15.1). Servidores Ubuntu são amd64 (nativo).
+  # Se for trocar pelo SEU código: comente `image:` e use o bloco `build:` abaixo.
+  image: chatwoot/chatwoot:v4.15.1
+  # build:
+  #   context: .
+  #   dockerfile: docker/Dockerfile
+  env_file: .env.production
+  restart: unless-stopped
+  volumes:
+    - storage_data:/app/storage
+
+services:
+  rails:
+    <<: *base
+    depends_on:
+      - postgres
+      - redis
+    # Exposto SÓ no localhost do servidor — o CloudPanel (nginx no host) faz o proxy reverso.
+    # Se a porta 3000 já estiver em uso, troque para outra (ex.: 3036) aqui e no CloudPanel.
+    ports:
+      - '127.0.0.1:3000:3000'
+    environment:
+      - NODE_ENV=production
+      - RAILS_ENV=production
+      - INSTALLATION_ENV=docker
+    entrypoint: docker/entrypoints/rails.sh
+    command: ['bundle', 'exec', 'rails', 's', '-p', '3000', '-b', '0.0.0.0']
+
+  sidekiq:
+    <<: *base
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - NODE_ENV=production
+      - RAILS_ENV=production
+      - INSTALLATION_ENV=docker
+    command: ['bundle', 'exec', 'sidekiq', '-C', 'config/sidekiq.yml']
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    # SEM porta publicada (acesso só interno à rede do compose).
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=chatwoot
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "redis-server --requirepass \"$REDIS_PASSWORD\""]
+    env_file: .env.production
+    volumes:
+      - redis_data:/data
+    # SEM porta publicada.
+
+volumes:
+  storage_data:
+  postgres_data:
+  redis_data:
